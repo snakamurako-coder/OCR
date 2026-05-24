@@ -62,10 +62,18 @@ function setupResources() {
 }
 
 /**
- * 機能1: リネーム処理
- * File ID の参照・書き込み先を D列(index 3) に変更
+ * 機能1: リネーム / 名簿紐付け処理
+ * mode: 'rename' = ファイル名変更 + D列にFile ID
+ *       'link'   = 紐付けのみ（ファイル名は維持）+ D列にFile ID
+ *       'skip'   = 何もしない
  */
-function renameFilesProcess() {
+function renameFilesProcess(mode) {
+  if (!mode) mode = 'rename';
+  if (mode === 'skip') {
+    return "処理をスキップしました。（ファイル名・名簿紐付けは変更していません）";
+  }
+  const doRename = mode !== 'link';
+
   const folderId = getProperty('FOLDER_ID');
   const sheetId = getProperty('SHEET_ID');
   if (!folderId || !sheetId) throw new Error("セットアップ未完了");
@@ -89,7 +97,7 @@ function renameFilesProcess() {
   // 枚数チェック
   const expected = data.filter(r => r[2] == "").length; 
   const actual = fileList.length;
-  let processLog = [];
+  let processLog = [doRename ? "モード: リネーム" : "モード: 紐付けのみ"];
 
   if (actual !== expected) {
     processLog.push(`⚠️【警告】枚数不一致: 出席${expected}名 vs 画像${actual}枚`);
@@ -115,15 +123,19 @@ function renameFilesProcess() {
     if (fileIndex < fileList.length) {
       const file = fileList[fileIndex];
       const orig = file.getName();
-      const ext = orig.includes('.') ? orig.substring(orig.lastIndexOf('.')) : '';
-      const newName = `${id}_${name}${ext}`; 
 
       try {
-        if (orig !== newName) {
-           file.setName(newName);
-           processLog.push(`[リネーム] ${orig} -> ${newName}`);
+        if (doRename) {
+          const ext = orig.includes('.') ? orig.substring(orig.lastIndexOf('.')) : '';
+          const newName = `${id}_${name}${ext}`;
+          if (orig !== newName) {
+            file.setName(newName);
+            processLog.push(`[リネーム] ${orig} -> ${newName}`);
+          } else {
+            processLog.push(`[維持] ${orig}`);
+          }
         } else {
-           processLog.push(`[維持] ${orig}`);
+          processLog.push(`[紐付け] ${orig} → ${name} (ID:${id})`);
         }
         updateData.push([file.getId()]);
         fileIndex++; 

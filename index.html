@@ -48,9 +48,26 @@
       </div>
       
       <div class="step-block">
-        <h4>Step 1: リネーム実行</h4>
-        <p>フォルダ内のファイルを連番・名簿順にリネームします。</p>
-        <button onclick="runRename()" id="btnRename" disabled>リネーム実行</button>
+        <h4>Step 1: 名簿と画像の対応付け</h4>
+        <p>フォルダ内の画像を名簿順（ファイル名ソート順）で対応付けます。</p>
+        <fieldset style="border:none; padding:0; margin-bottom:15px;">
+          <label style="display:block; margin-bottom:8px;">
+            <input type="radio" name="renameMode" value="rename" checked>
+            ファイル名をリネームする（<code>ID_氏名.ext</code> 形式）
+          </label>
+          <label style="display:block; margin-bottom:8px;">
+            <input type="radio" name="renameMode" value="link">
+            名簿と紐付けのみ（ファイル名は変更しない）
+          </label>
+          <label style="display:block; margin-bottom:8px;">
+            <input type="radio" name="renameMode" value="skip">
+            実行しない（Step 2 へそのまま進む）
+          </label>
+        </fieldset>
+        <button onclick="runRename()" id="btnRename" disabled>実行</button>
+        <p id="rename-skip-hint" style="display:none; font-size:0.85rem; color:#666; margin-top:8px;">
+          名簿紐付け・リネームは行いません。D列に File ID が既に入っている場合はそのまま OCR できます。
+        </p>
         <div id="loader-rename" class="loader"></div>
       </div>
 
@@ -96,7 +113,8 @@
       let rectList = [];
       const MAX_RECTS = 15;
       
-      let currentImageIndex = 0; 
+      let currentImageIndex = 0;
+      let renameReady = false;
 
       window.onload = function() {
         canvas = document.getElementById('imageCanvas');
@@ -104,6 +122,9 @@
         canvas.addEventListener('mousedown', onMouseDown);
         canvas.addEventListener('mousemove', onMouseMove);
         canvas.addEventListener('mouseup', onMouseUp);
+        document.querySelectorAll('input[name="renameMode"]').forEach(el => {
+          el.addEventListener('change', updateRenameModeUi);
+        });
         checkAndSetup();
       };
 
@@ -126,11 +147,29 @@
       }
 
       function enableButtons(isApiReady) {
-        document.getElementById('btnRename').disabled = false;
+        renameReady = true;
         document.getElementById('btnLoadImage').disabled = false;
         document.getElementById('btnPrev').disabled = false;
         document.getElementById('btnNext').disabled = false;
         document.getElementById('btnOcr').disabled = !isApiReady;
+        updateRenameModeUi();
+      }
+
+      function getRenameMode() {
+        const selected = document.querySelector('input[name="renameMode"]:checked');
+        return selected ? selected.value : 'rename';
+      }
+
+      function updateRenameModeUi() {
+        const mode = getRenameMode();
+        const isSkip = mode === 'skip';
+        const btn = document.getElementById('btnRename');
+        btn.style.display = isSkip ? 'none' : 'inline-block';
+        document.getElementById('rename-skip-hint').style.display = isSkip ? 'block' : 'none';
+        if (!isSkip) {
+          btn.innerText = mode === 'rename' ? 'リネーム実行' : '紐付け実行';
+          btn.disabled = !renameReady;
+        }
       }
 
       function changeImage(direction) {
@@ -238,12 +277,22 @@
       }
       function toggleLoading(type, isLoading) {
         document.getElementById(type === 'rename' ? 'loader-rename' : 'loader-ocr').style.display = isLoading ? 'block' : 'none';
-        document.getElementById('btnRename').disabled = isLoading;
-        document.getElementById('btnOcr').disabled = isLoading;
+        if (type === 'rename') {
+          document.getElementById('btnRename').disabled = isLoading;
+        } else {
+          document.getElementById('btnOcr').disabled = isLoading;
+        }
       }
       function runRename() {
-        toggleLoading('rename', true); log("リネーム開始...");
-        google.script.run.withSuccessHandler(res=>{log(res);toggleLoading('rename',false);}).withFailureHandler(err=>{log("Err: "+err);toggleLoading('rename',false);}).renameFilesProcess();
+        const mode = getRenameMode();
+        if (mode === 'skip') return;
+        const label = mode === 'rename' ? 'リネーム' : '紐付け';
+        toggleLoading('rename', true);
+        log(`${label}開始...`);
+        google.script.run
+          .withSuccessHandler(res => { log(res); toggleLoading('rename', false); updateRenameModeUi(); })
+          .withFailureHandler(err => { log("Err: " + err); toggleLoading('rename', false); })
+          .renameFilesProcess(mode);
       }
       function runOcr() {
         toggleLoading('ocr', true); log("OCR開始...");
