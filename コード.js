@@ -150,6 +150,7 @@ function ocrProcess(targetCoordsList) {
   const apiKey = getProperty('GCP_API_KEY');
   const sheetId = getProperty('SHEET_ID');
   if (!apiKey) throw new Error("GCP_API_KEY未設定");
+  if (!sheetId) throw new Error("セットアップ未完了");
 
   const ss = SpreadsheetApp.openById(sheetId);
   let sheet = ss.getSheetByName(SHEET_NAME);
@@ -236,6 +237,12 @@ function callVisionApi(fileId, apiKey, targetCoordsList) {
   const json = JSON.parse(response.getContentText());
 
   if (json.error) throw new Error(json.error.message);
+
+  if (!json.responses || json.responses.length === 0) {
+    return targetCoordsList && targetCoordsList.length > 0
+           ? new Array(targetCoordsList.length).fill("(文字なし)")
+           : ["(文字なし)"];
+  }
   
   // 何もなければ空文字を返す
   const annotation = json.responses[0].fullTextAnnotation;
@@ -251,6 +258,10 @@ function callVisionApi(fileId, apiKey, targetCoordsList) {
   }
 
   // 複数領域フィルタリング
+  if (!annotation.pages || annotation.pages.length === 0) {
+    return new Array(targetCoordsList.length).fill("(文字なし)");
+  }
+
   let buckets = new Array(targetCoordsList.length).fill().map(() => []);
 
   annotation.pages.forEach(p => p.blocks.forEach(b => b.paragraphs.forEach(pr => pr.words.forEach(w => {
