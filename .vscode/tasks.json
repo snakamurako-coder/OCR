@@ -1,0 +1,145 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+      // =====================================================================
+      // 基本：最新 Pull
+      // =====================================================================
+      {
+        "label": "GAS: Pull Latest Code",
+        "type": "shell",
+        "command": "clasp pull",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // Pushのみ（Deployしない）
+      // =====================================================================
+      {
+        "label": "GAS: Push (No Deploy)",
+        "type": "shell",
+        "command": "clasp push",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // バージョン一覧
+      // =====================================================================
+      {
+        "label": "GAS: Show All Versions",
+        "type": "shell",
+        "command": "clasp versions",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // Pull（過去バージョン）— 入力プロンプト
+      // =====================================================================
+      {
+        "label": "GAS: Pull Specific Version (Prompt)",
+        "type": "shell",
+        "command": "powershell -Command \"Write-Host 'Enter Version Number:'; $v = Read-Host; clasp pull --versionNumber $v\"",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // Pull前バックアップ（ZIP）
+      // =====================================================================
+      {
+        "label": "GAS: Backup Current Code (ZIP)",
+        "type": "shell",
+        "command": "powershell -Command \"Compress-Archive -Path * -DestinationPath backup_$(Get-Date -Format 'yyyyMMdd_HHmm').zip -Force\"",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // 新バージョン（手入力メッセージ）
+      // =====================================================================
+      {
+        "label": "GAS: Create Version (Manual Msg)",
+        "type": "shell",
+        "command": "clasp version \"Update from Cursor\"",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // 新デプロイ（Deploy）
+      // =====================================================================
+      {
+        "label": "GAS: New Deploy",
+        "type": "shell",
+        "command": "clasp deploy",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+
+      // =====================================================================
+      // Push & Deploy（最新コードをデプロイ）
+      // =====================================================================
+      {
+        "label": "GAS: Push & Deploy (Latest Code)",
+        "type": "shell",
+        "command": "powershell -Command \"clasp push; clasp deploy\"",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+
+      // =====================================================================
+      // Dev WebApp 自動取得 → 開く
+      // =====================================================================
+      {
+        "label": "GAS: Open Dev WebApp (Auto)",
+        "type": "shell",
+        "command": "powershell -Command \"$id = clasp deployments | Select-String 'dev' | ForEach-Object { ($_ -split '\\s+')[0] }; start https://script.google.com/macros/s/$id/dev\"",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // Exec WebApp 自動取得 → 開く
+      // =====================================================================
+      {
+        "label": "GAS: Open Exec WebApp (Auto)",
+        "type": "shell",
+        "command": "powershell -Command \"$id = clasp deployments | Select-String -NotMatch 'dev' | Select-Object -Last 1 | ForEach-Object { ($_ -split '\\s+')[0] }; start https://script.google.com/macros/s/$id/exec\"",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // ★ OneTouch-D（Dev デプロイ & 自動オープン）
+      // =====================================================================
+      {
+        "label": "GAS: OneTouch-D (Deploy & Open Dev)",
+        "type": "shell",
+        "command": "powershell -Command \"clasp push; clasp version 'AutoVersion-OneTouch-D'; clasp deploy; $id = clasp deployments | Select-String 'dev' | ForEach-Object { ($_ -split '\\s+')[0] }; start https://script.google.com/macros/s/$id/dev\"",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // ★ OneTouch-E（Exec デプロイ & 自動オープン）
+      // =====================================================================
+      {
+        "label": "GAS: OneTouch-E (Deploy & Open Exec)",
+        "type": "shell",
+        "command": "powershell -Command \"clasp push; clasp version 'AutoVersion-OneTouch-E'; clasp deploy; $id = clasp deployments | Select-String -NotMatch 'dev' | Select-Object -Last 1 | ForEach-Object { ($_ -split '\\s+')[0] }; start https://script.google.com/macros/s/$id/exec\"",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // GitHub クイック commit & push
+      // =====================================================================
+      {
+        "label": "GitHub: Quick Commit & Push",
+        "type": "shell",
+        "command": "git add . && git commit -m \"Quick commit from Cursor tasks\" && git push",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+  
+      // =====================================================================
+      // GitHub Pull
+      // =====================================================================
+      {
+        "label": "GitHub: Pull Latest",
+        "type": "shell",
+        "command": "git pull",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      }
+    ]
+  }
+  
