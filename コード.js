@@ -59,7 +59,68 @@ function setupResources() {
     messages.push("画像フォルダ作成完了");
   }
 
-  return { success: true, sheetUrl: sheetUrl, folderUrl: folderUrl, sheetId: sheetId, isApiReady: !!apiKey, logs: messages };
+  const countStatus = getRosterImageCountStatus();
+  return { success: true, sheetUrl: sheetUrl, folderUrl: folderUrl, sheetId: sheetId, isApiReady: !!apiKey, logs: messages, countStatus: countStatus };
+}
+
+function isActiveRosterEntry(id, name, absent) {
+  return !!(id || name) && !absent;
+}
+
+function getFolderFileList(folderId) {
+  const folder = DriveApp.getFolderById(folderId);
+  const files = folder.getFiles();
+  const fileList = [];
+  while (files.hasNext()) { fileList.push(files.next()); }
+  fileList.sort((a, b) => a.getName().localeCompare(b.getName(), undefined, { numeric: true, sensitivity: 'base' }));
+  return fileList;
+}
+
+function getRosterSheetData(sheetId) {
+  const ss = SpreadsheetApp.openById(sheetId);
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) sheet = ss.getSheets()[0];
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { sheet: sheet, data: [], lastRow: lastRow };
+  const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+  return { sheet: sheet, data: data, lastRow: lastRow };
+}
+
+/**
+ * UI用: 名簿（Absent除外）とフォルダ内画像枚数の照合
+ */
+function getRosterImageCountStatus() {
+  const folderId = getProperty('FOLDER_ID');
+  const sheetId = getProperty('SHEET_ID');
+  if (!folderId || !sheetId) {
+    return { success: false, message: "セットアップ未完了" };
+  }
+
+  try {
+    const fileList = getFolderFileList(folderId);
+    const roster = getRosterSheetData(sheetId);
+    if (roster.lastRow < 2) {
+      return { success: false, message: "名簿データなし" };
+    }
+
+    const expected = roster.data.filter(function(r) {
+      return isActiveRosterEntry(r[0], r[1], r[2]);
+    }).length;
+    const actual = fileList.length;
+    const match = expected === actual;
+
+    return {
+      success: true,
+      expected: expected,
+      actual: actual,
+      match: match,
+      message: match
+        ? "✅ 枚数一致: 受験者 " + expected + " 名 = 画像 " + actual + " 枚"
+        : "⚠️ 枚数不一致: 受験者 " + expected + " 名 vs 画像 " + actual + " 枚 — このまま紐付けすると名簿順と画像の対応がずれる可能性があります"
+    };
+  } catch (e) {
+    return { success: false, message: e.message };
+  }
 }
 
 /**
@@ -79,31 +140,24 @@ function renameFilesProcess(mode) {
   const sheetId = getProperty('SHEET_ID');
   if (!folderId || !sheetId) throw new Error("セットアップ未完了");
 
-  const folder = DriveApp.getFolderById(folderId);
-  const files = folder.getFiles();
-  const fileList = [];
-  while (files.hasNext()) { fileList.push(files.next()); }
-  fileList.sort((a, b) => a.getName().localeCompare(b.getName(), undefined, {numeric: true, sensitivity: 'base'}));
+  const fileList = getFolderFileList(folderId);
+  const roster = getRosterSheetData(sheetId);
+  const sheet = roster.sheet;
+  const data = roster.data;
 
-  const ss = SpreadsheetApp.openById(sheetId);
-  let sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) sheet = ss.getSheets()[0];
+  if (roster.lastRow < 2) return "名簿データなし";
 
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return "名簿データなし";
-
-  // A列(ID)〜D列(File ID)まで取得
-  const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
-
-  // 枚数チェック
-  const expected = data.filter(r => r[2] == "").length; 
+  const expected = data.filter(function(r) {
+    return isActiveRosterEntry(r[0], r[1], r[2]);
+  }).length;
   const actual = fileList.length;
   let processLog = [doRename ? "モード: リネーム" : "モード: 紐付けのみ"];
 
   if (actual !== expected) {
-    processLog.push(`⚠️【警告】枚数不一致: 出席${expected}名 vs 画像${actual}枚`);
+    processLog.push("⚠️【警告】枚数不一致: 受験者" + expected + "名 vs 画像" + actual + "枚");
+    processLog.push("   → 名簿順と画像の対応がずれる可能性があります。枚数を確認してください。");
   } else {
-    processLog.push(`✅ 枚数OK: ${expected}名 = ${actual}枚`);
+    processLog.push("✅ 枚数OK: 受験者" + expected + "名 = 画像" + actual + "枚");
   }
   processLog.push("--------------------------------------------------");
 
@@ -114,10 +168,11 @@ function renameFilesProcess(mode) {
     // 0:ID, 1:Name, 2:Absent, 3:FileID
     const [id, name, absent, currentFileId] = data[i];
     
-    if (!id && !name) { updateData.push([currentFileId]); continue; }
-    if (absent) {
-      processLog.push(`[スキップ] ${name} (欠席)`);
+    if (!isActiveRosterEntry(id, name, absent)) {
       updateData.push([currentFileId]);
+      if (absent && (id || name)) {
+        processLog.push("[スキップ] " + name + " (欠席)");
+      }
       continue;
     }
 
@@ -356,12 +411,7 @@ function getSampleImageForUi(index) {
   if (!folderId) return { success: false, message: "フォルダID未設定" };
   
   try {
-    const folder = DriveApp.getFolderById(folderId);
-    const files = folder.getFiles();
-    const fileList = [];
-    while (files.hasNext()) { fileList.push(files.next()); }
-
-    fileList.sort((a, b) => a.getName().localeCompare(b.getName(), undefined, {numeric: true, sensitivity: 'base'}));
+    const fileList = getFolderFileList(folderId);
 
     if (fileList.length === 0) return { success: false, message: "フォルダが空です" };
     

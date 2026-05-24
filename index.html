@@ -41,6 +41,13 @@
       .export-panel { background: #f9f9fc; padding: 15px; border-radius: 4px; border: 1px solid #e0e0e0; margin-top: 15px; }
       .export-link { color: #9b4dca; font-weight: bold; }
       .copy-feedback { color: green; font-size: 0.85em; }
+      .count-warning {
+        margin: 12px 0; padding: 12px 14px; border-radius: 4px; font-size: 0.9em; line-height: 1.5;
+      }
+      .count-warning.ok { background: #eef9f0; border: 1px solid #b8e0be; color: #2d6a3e; }
+      .count-warning.alert { background: #fff8e6; border: 1px solid #f0c36d; color: #8a5a00; }
+      .count-warning.error { background: #fdecea; border: 1px solid #f5c6cb; color: #a94442; }
+      .count-warning-detail { margin-top: 6px; font-size: 0.85em; opacity: 0.9; }
     </style>
   </head>
   <body>
@@ -59,6 +66,7 @@
       <div class="step-block">
         <h4>Step 1: 名簿と画像の対応付け</h4>
         <p>フォルダ内の画像を名簿順（ファイル名ソート順）で対応付けます。</p>
+        <div id="roster-count-warning" class="count-warning" style="display:none;"></div>
         <fieldset style="border:none; padding:0; margin-bottom:15px;">
           <label style="display:block; margin-bottom:8px;">
             <input type="radio" name="renameMode" value="rename" checked>
@@ -192,8 +200,38 @@
               document.getElementById('exportSheetId').value = defaultSheetId;
               enableButtons(res.isApiReady);
               if(res.logs) res.logs.forEach(m => log(m));
+              updateRosterCountWarning(res.countStatus);
             }
           }).withFailureHandler(err => log("初期化エラー: " + err.message)).setupResources();
+      }
+
+      function updateRosterCountWarning(status) {
+        const box = document.getElementById('roster-count-warning');
+        if (!status || !status.success) {
+          if (status && status.message) {
+            box.style.display = 'block';
+            box.className = 'count-warning error';
+            box.innerHTML = status.message;
+          } else {
+            box.style.display = 'none';
+            box.innerHTML = '';
+          }
+          return;
+        }
+
+        box.style.display = 'block';
+        box.className = status.match ? 'count-warning ok' : 'count-warning alert';
+        box.innerHTML = status.message +
+          (status.match ? '' :
+            '<div class="count-warning-detail">画像はOCRの都度入れ替える想定です。Absent を除いた名簿人数とフォルダ内の画像枚数を揃えてから実行してください。</div>');
+        if (!status.match) log(status.message);
+      }
+
+      function refreshRosterCountWarning() {
+        google.script.run
+          .withSuccessHandler(updateRosterCountWarning)
+          .withFailureHandler(err => log("枚数確認エラー: " + err.message))
+          .getRosterImageCountStatus();
       }
 
       function enableButtons(isApiReady) {
@@ -219,6 +257,9 @@
         if (!isSkip) {
           btn.innerText = mode === 'rename' ? 'リネーム実行' : '紐付け実行';
           btn.disabled = !renameReady;
+          refreshRosterCountWarning();
+        } else {
+          document.getElementById('roster-count-warning').style.display = 'none';
         }
       }
 
@@ -340,12 +381,37 @@
         const mode = getRenameMode();
         if (mode === 'skip') return;
         const label = mode === 'rename' ? 'リネーム' : '紐付け';
-        toggleLoading('rename', true);
-        log(`${label}開始...`);
+
+        const startRename = () => {
+          toggleLoading('rename', true);
+          log(label + "開始...");
+          google.script.run
+            .withSuccessHandler(res => {
+              log(res);
+              toggleLoading('rename', false);
+              updateRenameModeUi();
+              refreshRosterCountWarning();
+            })
+            .withFailureHandler(err => { log("Err: " + err); toggleLoading('rename', false); })
+            .renameFilesProcess(mode);
+        };
+
         google.script.run
-          .withSuccessHandler(res => { log(res); toggleLoading('rename', false); updateRenameModeUi(); })
-          .withFailureHandler(err => { log("Err: " + err); toggleLoading('rename', false); })
-          .renameFilesProcess(mode);
+          .withSuccessHandler(status => {
+            updateRosterCountWarning(status);
+            if (status && status.success && !status.match) {
+              const msg =
+                "画像 " + status.actual + " 枚と、名簿の受験者 " + status.expected + " 名（Absent除外）が一致しません。\n\n" +
+                "このまま実行すると、名簿順と画像の対応がずれる可能性があります。\n続行しますか？";
+              if (!confirm(msg)) {
+                log("枚数不一致のため " + label + " をキャンセルしました。");
+                return;
+              }
+            }
+            startRename();
+          })
+          .withFailureHandler(err => log("枚数確認エラー: " + err.message))
+          .getRosterImageCountStatus();
       }
       function runOcr() {
         toggleLoading('ocr', true);
