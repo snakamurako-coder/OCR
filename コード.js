@@ -42,6 +42,7 @@ function setupResources() {
     sheet.getRange("A1:E1").setBackground("#efefef").setFontWeight("bold");
     sheet.setFrozenRows(1);
     props.setProperty('SHEET_ID', ss.getId());
+    sheetId = ss.getId();
     sheetUrl = ss.getUrl();
     messages.push("管理シート作成完了 (新カラム構成)");
   }
@@ -58,7 +59,7 @@ function setupResources() {
     messages.push("画像フォルダ作成完了");
   }
 
-  return { success: true, sheetUrl: sheetUrl, folderUrl: folderUrl, isApiReady: !!apiKey, logs: messages };
+  return { success: true, sheetUrl: sheetUrl, folderUrl: folderUrl, sheetId: sheetId, isApiReady: !!apiKey, logs: messages };
 }
 
 /**
@@ -155,8 +156,7 @@ function renameFilesProcess(mode) {
 }
 
 /**
- * 機能2: OCR処理
- * 結果を E列(5列目) 以降に横展開して書き込み
+ * 機能2: OCR処理（結果をTSV形式で返却、シートには書き込まない）
  */
 function ocrProcess(targetCoordsList) {
   const apiKey = getProperty('GCP_API_KEY');
@@ -167,63 +167,116 @@ function ocrProcess(targetCoordsList) {
   const ss = SpreadsheetApp.openById(sheetId);
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) sheet = ss.getSheets()[0];
-  
+
   const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return "データなし";
+  if (lastRow < 2) throw new Error("データなし");
 
-  // A〜D列を取得 (File IDは D列=index 3)
   const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
-  let processLog = [];
-
-  // ヘッダーの自動拡張チェック
-  const resultCount = targetCoordsList ? targetCoordsList.length : 1;
-  ensureHeaders(sheet, resultCount);
+  const resultCount = targetCoordsList && targetCoordsList.length > 0 ? targetCoordsList.length : 1;
+  const headers = buildOcrHeaders(resultCount);
+  const rows = [];
+  const processLog = [];
 
   for (let i = 0; i < data.length; i++) {
-    const name = data[i][1];
-    const fileId = data[i][3]; // D列
+    const [id, name, absent, fileId] = data[i];
+    const rowNum = i + 2;
 
-    // ファイルIDがある場合のみ実行（上書き防止判定は簡易的に省略、必要ならE列チェックを追加）
-    if (fileId) {
-      try {
-        // 配列で受け取る ['Res1', 'Res2', ...]
-        const texts = callVisionApi(fileId, apiKey, targetCoordsList);
-        
-        processLog.push(`[OCR完了] 行${i + 2}: ${name}`);
-        
-        // E列(5列目)から横方向に書き込み
-        if (texts.length > 0) {
-          sheet.getRange(i + 2, 5, 1, texts.length).setValues([texts]);
-        }
-      } catch (e) {
-        processLog.push(`[OCRエラー] 行${i + 2}: ${e.message}`);
-      }
+    if (!fileId) continue;
+
+    const base = [id, name, absent, fileId];
+    try {
+      const texts = callVisionApi(fileId, apiKey, targetCoordsList);
+      rows.push(base.concat(texts));
+      processLog.push(`[OCR完了] 行${rowNum}: ${name}`);
+    } catch (e) {
+      const errCells = new Array(resultCount).fill(`(エラー: ${e.message})`);
+      rows.push(base.concat(errCells));
+      processLog.push(`[OCRエラー] 行${rowNum}: ${e.message}`);
     }
   }
-  return processLog.length > 0 ? processLog.join('\n') : "未処理なし";
+
+  if (rows.length === 0) throw new Error("未処理なし（File ID が設定された行がありません）");
+
+  return {
+    success: true,
+    headers: headers,
+    rows: rows,
+    tsv: rowsToTsv(headers, rows),
+    log: processLog.join('\n'),
+    defaultSheetId: sheetId
+  };
 }
 
 /**
- * ヘッダー自動拡張
- * 現在の列数を確認し、OCR Result N が足りなければ追加する
+ * OCR結果をスプレッドシートにエクスポート
+ * exportMode: 'existing' = 指定IDのスプレッドシート / 'new' = 新規作成
  */
-function ensureHeaders(sheet, count) {
-  const startCol = 5; // E列
-  const lastCol = sheet.getLastColumn();
-  const needed = (startCol - 1) + count; // D列まで + 必要な数
+function exportOcrResults(exportMode, targetSheetId, headers, rows) {
+  if (!headers || !rows || rows.length === 0) throw new Error("エクスポートするデータがありません");
 
-  if (lastCol < needed) {
-    const headers = [];
-    for (let i = lastCol - (startCol - 1) + 1; i <= count; i++) {
-      headers.push(`OCR Result ${i}`);
+  let ss, sheet, sheetUrl, message;
+
+  if (exportMode === 'new') {
+    const name = `OCR結果_${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmm')}`;
+    ss = SpreadsheetApp.create(name);
+    sheet = ss.getSheets()[0];
+    sheet.setName('OCR Results');
+    message = `新規スプレッドシート「${name}」を作成しました。`;
+  } else {
+    const id = extractSpreadsheetId(targetSheetId);
+    if (!id) throw new Error("スプレッドシートIDが未入力です");
+    try {
+      ss = SpreadsheetApp.openById(id);
+    } catch (e) {
+      throw new Error("スプレッドシートを開けません: " + e.message);
     }
-    if (headers.length > 0) {
-      sheet.getRange(1, lastCol + 1, 1, headers.length)
-           .setValues([headers])
-           .setBackground("#efefef")
-           .setFontWeight("bold");
+    sheet = ss.getSheetByName('OCR Results');
+    if (!sheet) {
+      sheet = ss.insertSheet('OCR Results');
+    } else {
+      sheet.clear();
     }
+    message = `スプレッドシートにエクスポートしました（シート: OCR Results）。`;
   }
+
+  writeOcrTableToSheet(sheet, headers, rows);
+  sheetUrl = ss.getUrl();
+
+  return { success: true, message: message, sheetUrl: sheetUrl, sheetId: ss.getId() };
+}
+
+function buildOcrHeaders(resultCount) {
+  const headers = ['ID', 'Name', 'Absent', 'File ID'];
+  for (let i = 1; i <= resultCount; i++) headers.push(`OCR Result ${i}`);
+  return headers;
+}
+
+function rowsToTsv(headers, rows) {
+  const lines = [headers.map(escapeTsvCell).join('\t')];
+  rows.forEach(row => lines.push(row.map(escapeTsvCell).join('\t')));
+  return lines.join('\n');
+}
+
+function escapeTsvCell(val) {
+  const s = String(val == null ? '' : val);
+  if (/[\t\n\r"]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function extractSpreadsheetId(input) {
+  if (!input) return '';
+  const m = String(input).match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  return m ? m[1] : String(input).trim();
+}
+
+function writeOcrTableToSheet(sheet, headers, rows) {
+  const table = [headers].concat(rows);
+  sheet.clear();
+  sheet.getRange(1, 1, table.length, headers.length).setValues(table);
+  sheet.getRange(1, 1, 1, headers.length)
+       .setBackground('#efefef')
+       .setFontWeight('bold');
+  sheet.setFrozenRows(1);
 }
 
 /**

@@ -32,6 +32,15 @@
       
       .btn-sm { padding: 0 15px; height: 3.0rem; line-height: 3.0rem; }
       #file-info { font-weight: bold; color: #333; font-size: 0.9em; flex-grow: 1; text-align: center; }
+      #ocr-tsv-area {
+        width: 100%; min-height: 180px; font-family: monospace; font-size: 0.85em;
+        background: #fafafa; border: 1px solid #ddd; border-radius: 4px; padding: 10px;
+        resize: vertical; box-sizing: border-box;
+      }
+      .result-actions { display: flex; gap: 10px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+      .export-panel { background: #f9f9fc; padding: 15px; border-radius: 4px; border: 1px solid #e0e0e0; margin-top: 15px; }
+      .export-link { color: #9b4dca; font-weight: bold; }
+      .copy-feedback { color: green; font-size: 0.85em; }
     </style>
   </head>
   <body>
@@ -97,9 +106,43 @@
 
       <div class="step-block">
         <h4>Step 3: OCR実行</h4>
-        <p>※シートの列構成: ID, Name, Absent, FileID, Result1, Result2...</p>
+        <p>読み取り結果は TSV 形式で表示されます。内容を確認・コピーしたうえで、Step 4 からスプレッドシートへエクスポートできます。</p>
         <button onclick="runOcr()" id="btnOcr" disabled>OCR実行</button>
         <div id="loader-ocr" class="loader"></div>
+
+        <div id="ocr-result-panel" style="display:none; margin-top:20px;">
+          <h5>読み取り結果（TSV）</h5>
+          <div class="result-actions">
+            <button onclick="copyTsv()" id="btnCopyTsv" class="button button-outline btn-sm">TSVをコピー</button>
+            <span id="copy-feedback" class="copy-feedback"></span>
+          </div>
+          <textarea id="ocr-tsv-area" readonly></textarea>
+        </div>
+      </div>
+
+      <div class="step-block" id="export-step" style="display:none;">
+        <h4>Step 4: スプレッドシートへエクスポート</h4>
+        <p>TSV の内容を確認後、エクスポート先を選んでください。</p>
+        <div class="export-panel">
+          <label style="display:block; margin-bottom:8px;">
+            <input type="radio" name="exportMode" value="existing" checked>
+            指定IDのスプレッドシートにエクスポート
+          </label>
+          <div id="existing-sheet-input" style="margin:0 0 12px 24px;">
+            <input type="text" id="exportSheetId" placeholder="スプレッドシートID または URL" style="width:100%; margin-bottom:4px;">
+            <small style="color:#666;">「OCR Results」シートに書き込みます（なければ作成）。管理シートIDが初期値です。</small>
+          </div>
+          <label style="display:block; margin-bottom:12px;">
+            <input type="radio" name="exportMode" value="new">
+            新規スプレッドシートを作成してエクスポート
+          </label>
+          <div class="result-actions">
+            <button onclick="runExport()" id="btnExport" class="button">エクスポート実行</button>
+            <button onclick="skipExport()" class="button button-clear">エクスポートせず完了</button>
+            <div id="loader-export" class="loader"></div>
+          </div>
+          <p id="export-result" style="margin-top:10px; font-size:0.9em;"></p>
+        </div>
       </div>
       
       <h4>システムログ</h4>
@@ -115,6 +158,8 @@
       
       let currentImageIndex = 0;
       let renameReady = false;
+      let defaultSheetId = '';
+      let ocrResultData = null;
 
       window.onload = function() {
         canvas = document.getElementById('imageCanvas');
@@ -124,6 +169,9 @@
         canvas.addEventListener('mouseup', onMouseUp);
         document.querySelectorAll('input[name="renameMode"]').forEach(el => {
           el.addEventListener('change', updateRenameModeUi);
+        });
+        document.querySelectorAll('input[name="exportMode"]').forEach(el => {
+          el.addEventListener('change', updateExportModeUi);
         });
         checkAndSetup();
       };
@@ -140,6 +188,8 @@
                 document.getElementById('apiStatus').innerHTML = `<span class="status-alert">未設定</span>`;
                 log("警告: GCP_API_KEY が設定されていません。");
               }
+              defaultSheetId = res.sheetId || '';
+              document.getElementById('exportSheetId').value = defaultSheetId;
               enableButtons(res.isApiReady);
               if(res.logs) res.logs.forEach(m => log(m));
             }
@@ -276,11 +326,14 @@
         d.innerText = msg + "\n" + d.innerText; 
       }
       function toggleLoading(type, isLoading) {
-        document.getElementById(type === 'rename' ? 'loader-rename' : 'loader-ocr').style.display = isLoading ? 'block' : 'none';
+        const loaderId = type === 'rename' ? 'loader-rename' : type === 'export' ? 'loader-export' : 'loader-ocr';
+        document.getElementById(loaderId).style.display = isLoading ? 'block' : 'none';
         if (type === 'rename') {
           document.getElementById('btnRename').disabled = isLoading;
-        } else {
+        } else if (type === 'ocr') {
           document.getElementById('btnOcr').disabled = isLoading;
+        } else if (type === 'export') {
+          document.getElementById('btnExport').disabled = isLoading;
         }
       }
       function runRename() {
@@ -295,9 +348,99 @@
           .renameFilesProcess(mode);
       }
       function runOcr() {
-        toggleLoading('ocr', true); log("OCR開始...");
+        toggleLoading('ocr', true);
+        log("OCR開始...");
+        hideOcrResults();
         const actualCoords = rectList.map(r => r.actual);
-        google.script.run.withSuccessHandler(res=>{log(res);toggleLoading('ocr',false);}).withFailureHandler(err=>{log("Err: "+err);toggleLoading('ocr',false);}).ocrProcess(actualCoords);
+        google.script.run
+          .withSuccessHandler(onOcrComplete)
+          .withFailureHandler(err => { log("Err: " + err); toggleLoading('ocr', false); })
+          .ocrProcess(actualCoords);
+      }
+
+      function onOcrComplete(res) {
+        toggleLoading('ocr', false);
+        if (!res || !res.success) {
+          log("OCR失敗");
+          return;
+        }
+        ocrResultData = res;
+        document.getElementById('ocr-tsv-area').value = res.tsv;
+        document.getElementById('ocr-result-panel').style.display = 'block';
+        document.getElementById('export-step').style.display = 'block';
+        document.getElementById('export-result').innerHTML = '';
+        document.getElementById('copy-feedback').innerText = '';
+        if (res.defaultSheetId) {
+          defaultSheetId = res.defaultSheetId;
+          document.getElementById('exportSheetId').value = defaultSheetId;
+        }
+        updateExportModeUi();
+        log(res.log);
+        log(`OCR完了: ${res.rows.length} 行。TSVを確認し、Step 4 でエクスポートしてください。`);
+        document.getElementById('export-step').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+
+      function hideOcrResults() {
+        ocrResultData = null;
+        document.getElementById('ocr-result-panel').style.display = 'none';
+        document.getElementById('export-step').style.display = 'none';
+        document.getElementById('ocr-tsv-area').value = '';
+        document.getElementById('export-result').innerHTML = '';
+      }
+
+      function copyTsv() {
+        const area = document.getElementById('ocr-tsv-area');
+        area.select();
+        area.setSelectionRange(0, area.value.length);
+        const feedback = document.getElementById('copy-feedback');
+        const done = () => { feedback.innerText = 'コピーしました'; setTimeout(() => feedback.innerText = '', 2000); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(area.value).then(done).catch(() => {
+            document.execCommand('copy') ? done() : feedback.innerText = 'コピーに失敗しました';
+          });
+        } else {
+          document.execCommand('copy') ? done() : feedback.innerText = 'コピーに失敗しました';
+        }
+      }
+
+      function getExportMode() {
+        const selected = document.querySelector('input[name="exportMode"]:checked');
+        return selected ? selected.value : 'existing';
+      }
+
+      function updateExportModeUi() {
+        const isExisting = getExportMode() === 'existing';
+        document.getElementById('existing-sheet-input').style.display = isExisting ? 'block' : 'none';
+      }
+
+      function runExport() {
+        if (!ocrResultData) { log("エクスポートするOCR結果がありません"); return; }
+        const mode = getExportMode();
+        const targetId = document.getElementById('exportSheetId').value.trim();
+        if (mode === 'existing' && !targetId) {
+          alert("スプレッドシートIDまたはURLを入力してください。");
+          return;
+        }
+        toggleLoading('export', true);
+        log("エクスポート開始...");
+        google.script.run
+          .withSuccessHandler(res => {
+            toggleLoading('export', false);
+            document.getElementById('export-result').innerHTML =
+              `${res.message} <a href="${res.sheetUrl}" target="_blank" class="export-link">シートを開く ↗</a>`;
+            log(res.message);
+          })
+          .withFailureHandler(err => {
+            toggleLoading('export', false);
+            log("エクスポートエラー: " + err);
+            document.getElementById('export-result').innerText = "エラー: " + err;
+          })
+          .exportOcrResults(mode, targetId, ocrResultData.headers, ocrResultData.rows);
+      }
+
+      function skipExport() {
+        log("エクスポートをスキップしました。TSVは画面上でコピーできます。");
+        document.getElementById('export-result').innerText = "エクスポートは行いませんでした。";
       }
     </script>
   </body>
