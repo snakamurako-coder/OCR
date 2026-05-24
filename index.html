@@ -114,23 +114,23 @@
               document.getElementById('folderLink').innerHTML = `<a href="${res.folderUrl}" target="_blank" class="status-link">フォルダを開く ↗</a>`;
               if (res.isApiReady) {
                 document.getElementById('apiStatus').innerHTML = `<span style="color:green;">設定済み OK</span>`;
-                enableButtons();
                 log("システム準備完了。");
               } else {
                 document.getElementById('apiStatus').innerHTML = `<span class="status-alert">未設定</span>`;
                 log("警告: GCP_API_KEY が設定されていません。");
               }
+              enableButtons(res.isApiReady);
               if(res.logs) res.logs.forEach(m => log(m));
             }
           }).withFailureHandler(err => log("初期化エラー: " + err.message)).setupResources();
       }
 
-      function enableButtons() {
+      function enableButtons(isApiReady) {
         document.getElementById('btnRename').disabled = false;
         document.getElementById('btnLoadImage').disabled = false;
         document.getElementById('btnPrev').disabled = false;
         document.getElementById('btnNext').disabled = false;
-        document.getElementById('btnOcr').disabled = false;
+        document.getElementById('btnOcr').disabled = !isApiReady;
       }
 
       function changeImage(direction) {
