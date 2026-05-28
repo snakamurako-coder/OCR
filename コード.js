@@ -128,11 +128,15 @@ function getRosterImageCountStatus() {
  * mode: 'rename' = ファイル名変更 + D列にFile ID
  *       'link'   = 紐付けのみ（ファイル名は維持）+ D列にFile ID
  *       'skip'   = 何もしない
+ *       'simple' = 名簿紐付けなし（OCRはシンプル出力形式）
  */
 function renameFilesProcess(mode) {
   if (!mode) mode = 'rename';
   if (mode === 'skip') {
     return "処理をスキップしました。（ファイル名・名簿紐付けは変更していません）";
+  }
+  if (mode === 'simple') {
+    return "シンプル出力モード: 名簿紐付け・リネームは行いません。OCR結果は「ファイル名、読み取り箇所１、読み取り箇所２…」形式で出力されます。";
   }
   const doRename = mode !== 'link';
 
@@ -212,8 +216,15 @@ function renameFilesProcess(mode) {
 
 /**
  * 機能2: OCR処理（結果をTSV形式で返却、シートには書き込まない）
+ * outputMode: 'standard' = ID, Name, Absent, File ID, OCR Result 1…
+ *             'simple'   = ファイル名, 読み取り箇所１, 読み取り箇所２…
  */
-function ocrProcess(targetCoordsList) {
+function ocrProcess(targetCoordsList, outputMode) {
+  if (!outputMode) outputMode = 'standard';
+  if (outputMode === 'simple') {
+    return ocrProcessSimple(targetCoordsList);
+  }
+
   const apiKey = getProperty('GCP_API_KEY');
   const sheetId = getProperty('SHEET_ID');
   if (!apiKey) throw new Error("GCP_API_KEY未設定");
@@ -263,6 +274,50 @@ function ocrProcess(targetCoordsList) {
 }
 
 /**
+ * シンプル出力: フォルダ内画像をファイル名順にOCR
+ */
+function ocrProcessSimple(targetCoordsList) {
+  const apiKey = getProperty('GCP_API_KEY');
+  const folderId = getProperty('FOLDER_ID');
+  const sheetId = getProperty('SHEET_ID');
+  if (!apiKey) throw new Error("GCP_API_KEY未設定");
+  if (!folderId) throw new Error("セットアップ未完了");
+
+  const fileList = getFolderFileList(folderId).filter(function(f) {
+    return f.getMimeType().startsWith('image/');
+  });
+  if (fileList.length === 0) throw new Error("フォルダ内に画像がありません");
+
+  const resultCount = targetCoordsList && targetCoordsList.length > 0 ? targetCoordsList.length : 1;
+  const headers = buildSimpleOcrHeaders(resultCount);
+  const rows = [];
+  const processLog = [];
+
+  for (let i = 0; i < fileList.length; i++) {
+    const file = fileList[i];
+    const fileName = file.getName();
+    try {
+      const texts = callVisionApi(file.getId(), apiKey, targetCoordsList);
+      rows.push([fileName].concat(texts));
+      processLog.push(`[OCR完了] ${fileName}`);
+    } catch (e) {
+      const errCells = new Array(resultCount).fill(`(エラー: ${e.message})`);
+      rows.push([fileName].concat(errCells));
+      processLog.push(`[OCRエラー] ${fileName}: ${e.message}`);
+    }
+  }
+
+  return {
+    success: true,
+    headers: headers,
+    rows: rows,
+    tsv: rowsToTsv(headers, rows),
+    log: processLog.join('\n'),
+    defaultSheetId: sheetId || ''
+  };
+}
+
+/**
  * OCR結果をスプレッドシートにエクスポート
  * exportMode: 'existing' = 指定IDのスプレッドシート / 'new' = 新規作成
  */
@@ -303,6 +358,12 @@ function exportOcrResults(exportMode, targetSheetId, headers, rows) {
 function buildOcrHeaders(resultCount) {
   const headers = ['ID', 'Name', 'Absent', 'File ID'];
   for (let i = 1; i <= resultCount; i++) headers.push(`OCR Result ${i}`);
+  return headers;
+}
+
+function buildSimpleOcrHeaders(resultCount) {
+  const headers = ['ファイル名'];
+  for (let i = 1; i <= resultCount; i++) headers.push(`読み取り箇所${i}`);
   return headers;
 }
 

@@ -80,10 +80,17 @@
             <input type="radio" name="renameMode" value="skip">
             実行しない（Step 2 へそのまま進む）
           </label>
+          <label style="display:block; margin-bottom:8px;">
+            <input type="radio" name="renameMode" value="simple">
+            シンプル出力（ファイル名、読み取り箇所１、読み取り箇所２…）
+          </label>
         </fieldset>
         <button onclick="runRename()" id="btnRename" disabled>実行</button>
         <p id="rename-skip-hint" style="display:none; font-size:0.85rem; color:#666; margin-top:8px;">
           名簿紐付け・リネームは行いません。D列に File ID が既に入っている場合はそのまま OCR できます。
+        </p>
+        <p id="rename-simple-hint" style="display:none; font-size:0.85rem; color:#666; margin-top:8px;">
+          名簿への紐付け・リネームは行いません。フォルダ内の画像をファイル名順に OCR し、結果は「ファイル名、読み取り箇所１、読み取り箇所２…」形式で出力します。
         </p>
         <div id="loader-rename" class="loader"></div>
       </div>
@@ -251,16 +258,23 @@
       function updateRenameModeUi() {
         const mode = getRenameMode();
         const isSkip = mode === 'skip';
+        const isSimple = mode === 'simple';
+        const hideBtn = isSkip || isSimple;
         const btn = document.getElementById('btnRename');
-        btn.style.display = isSkip ? 'none' : 'inline-block';
+        btn.style.display = hideBtn ? 'none' : 'inline-block';
         document.getElementById('rename-skip-hint').style.display = isSkip ? 'block' : 'none';
-        if (!isSkip) {
+        document.getElementById('rename-simple-hint').style.display = isSimple ? 'block' : 'none';
+        if (!hideBtn) {
           btn.innerText = mode === 'rename' ? 'リネーム実行' : '紐付け実行';
           btn.disabled = !renameReady;
           refreshRosterCountWarning();
         } else {
           document.getElementById('roster-count-warning').style.display = 'none';
         }
+      }
+
+      function isSimpleOutputMode() {
+        return getRenameMode() === 'simple';
       }
 
       function changeImage(direction) {
@@ -379,7 +393,7 @@
       }
       function runRename() {
         const mode = getRenameMode();
-        if (mode === 'skip') return;
+        if (mode === 'skip' || mode === 'simple') return;
         const label = mode === 'rename' ? 'リネーム' : '紐付け';
 
         const startRename = () => {
@@ -415,13 +429,14 @@
       }
       function runOcr() {
         toggleLoading('ocr', true);
-        log("OCR開始...");
+        const simple = isSimpleOutputMode();
+        log(simple ? "OCR開始（シンプル出力）..." : "OCR開始...");
         hideOcrResults();
         const actualCoords = rectList.map(r => r.actual);
         google.script.run
           .withSuccessHandler(onOcrComplete)
           .withFailureHandler(err => { log("Err: " + err); toggleLoading('ocr', false); })
-          .ocrProcess(actualCoords);
+          .ocrProcess(actualCoords, simple ? 'simple' : 'standard');
       }
 
       function onOcrComplete(res) {
